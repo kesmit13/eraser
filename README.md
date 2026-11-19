@@ -250,7 +250,7 @@ Running it on GitHub Actions instead would mean storing your personal details an
 
 ## Inbox Monitoring (optional)
 
-`eraser monitor`, and "Scan inbox" in the web UI, read broker replies over IMAP and sort them as done, form required, confirmation needed, more info required, rejected, or pending. They need an inbox app password in `config.yaml` (Settings in the web UI). Safeguards:
+`eraser monitor`, and "Scan inbox" in the web UI, read broker replies over IMAP and sort them as done, form required, confirmation needed, more info required, rejected, or pending. Set the IMAP server, account and folder in Settings in the web UI (or `inbox` in `config.yaml`). Eraser reads one folder, `INBOX` by default; if a mail rule files broker replies into their own folder, enter that folder's IMAP name (often `INBOX.Eraser` or `INBOX/Eraser`). Changing the server requires entering the password again. Safeguards:
 
 - **Read-only.** Mailboxes are opened read-only. Nothing is marked as read, and nothing is moved unless you turn on `auto_archive`.
 - **Broker mail only.** For recent mail, only the sender and subject are fetched. Full message bodies are downloaded only for messages from a registered broker domain, or replies to one of your sent requests (matched by Message-ID). Personal mailbox domains like Gmail never count as brokers.

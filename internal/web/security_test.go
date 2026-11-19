@@ -341,3 +341,95 @@ func TestTaskCompleteIgnoresPostedStatus(t *testing.T) {
 		t.Errorf("after skip: %q, want skipped", got)
 	}
 }
+
+func postInbox(h http.Handler, form url.Values) *httptest.ResponseRecorder {
+	return do(h, http.MethodPost, "/settings/inbox", func(r *http.Request) {
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
+		r.Body = readCloser(form.Encode())
+	})
+}
+
+// The inbox form sets any IMAP server and folder. Only Gmail's and Outlook's
+// own hosts get their provider label (it decides whose Authentication-Results
+// are trusted).
+func TestSettingsInboxServerAndFolder(t *testing.T) {
+	s, h := newTestServer(t, testConfig())
+
+	page := do(h, http.MethodGet, "/settings", nil).Body.String()
+	for _, want := range []string{`name="inbox_server"`, `name="inbox_port"`, `name="inbox_folder"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("settings page lacks %s", want)
+		}
+	}
+
+	rec := postInbox(h, url.Values{"inbox_email": {"jane@example.com"}, "inbox_password": {"pw"},
+		"inbox_server": {"mail.privateemail.com"}, "inbox_port": {"993"}, "inbox_folder": {"INBOX.Eraser"}})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "enabled") {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	got := s.cfg().Inbox
+	if got.Provider != "imap" || got.Server != "mail.privateemail.com" || got.Port != 993 || got.Folder != "INBOX.Eraser" {
+		t.Fatalf("inbox = %+v", got)
+	}
+	if saved, err := config.Load(s.configPath); err != nil || saved.Inbox.Folder != "INBOX.Eraser" {
+		t.Fatalf("not saved: %v", err)
+	}
+	page = do(h, http.MethodGet, "/settings", nil).Body.String()
+	for _, want := range []string{`value="mail.privateemail.com"`, `value="INBOX.Eraser"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("settings page doesn't show %s", want)
+		}
+	}
+
+	// Back to Gmail's host: labeled gmail again; a blank folder means INBOX.
+	rec = postInbox(h, url.Values{"inbox_email": {"jane@gmail.com"}, "inbox_password": {"pw"},
+		"inbox_server": {"imap.gmail.com"}, "inbox_port": {""}, "inbox_folder": {""}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if got := s.cfg().Inbox; got.Provider != "gmail" || got.Port != 993 || got.Folder != "INBOX" {
+		t.Fatalf("inbox = %+v", got)
+	}
+}
+
+func TestSettingsInboxRejectsBadInput(t *testing.T) {
+	s, h := newTestServer(t, testConfig())
+	before := s.cfg().Inbox
+	base := url.Values{"inbox_email": {"jane@example.com"}, "inbox_password": {"pw"},
+		"inbox_server": {"mail.example.com"}, "inbox_port": {"993"}, "inbox_folder": {"INBOX"}}
+	for field, bad := range map[string]string{
+		"inbox_port":   "70000",
+		"inbox_server": "mail.example.com:993",
+		"inbox_folder": "Eraser\r\nA1 DELETE INBOX",
+	} {
+		form := url.Values{}
+		for k, v := range base {
+			form[k] = v
+		}
+		form.Set(field, bad)
+		rec := postInbox(h, form)
+		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "enabled successfully") {
+			t.Errorf("%s=%q was accepted", field, bad)
+		}
+	}
+	if got := s.cfg().Inbox; got != before {
+		t.Fatalf("rejected input changed the config: %+v", got)
+	}
+}
+
+// A blank password keeps the saved one only for the same account on the same
+// server; otherwise the saved password would be sent to the new server.
+func TestSettingsInboxPasswordNotReusedForNewServer(t *testing.T) {
+	cfg := testConfig()
+	cfg.Inbox.Server, cfg.Inbox.Port = "imap.gmail.com", 993
+	s, h := newTestServer(t, cfg)
+	rec := postInbox(h, url.Values{"inbox_email": {"jane@example.com"}, "inbox_password": {""},
+		"inbox_server": {"imap.attacker.example"}, "inbox_port": {"993"}})
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "enabled successfully") {
+		t.Fatalf("blank password accepted for a new server: %d", rec.Code)
+	}
+	if got := s.cfg().Inbox; got.Server != "imap.gmail.com" || got.Password != inboxSecret {
+		t.Fatalf("inbox = %s, password changed: %v", got.Server, got.Password != inboxSecret)
+	}
+}
