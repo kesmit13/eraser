@@ -433,3 +433,38 @@ func TestSettingsInboxPasswordNotReusedForNewServer(t *testing.T) {
 		t.Fatalf("inbox = %s, password changed: %v", got.Server, got.Password != inboxSecret)
 	}
 }
+
+// The authserv-id (whose Authentication-Results header is trusted) can be set
+// from the form; blank clears it, and only a plain host-like token is accepted.
+func TestSettingsInboxAuthServID(t *testing.T) {
+	s, h := newTestServer(t, testConfig())
+	form := url.Values{"inbox_email": {"jane@example.com"}, "inbox_password": {"pw"},
+		"inbox_server": {"mail.privateemail.com"}, "inbox_port": {"993"}, "inbox_folder": {"INBOX"},
+		"inbox_authserv_id": {" MX.PrivateEmail.com "}}
+	if rec := postInbox(h, form); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "enabled successfully") {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := s.cfg().Inbox.AuthServID; got != "mx.privateemail.com" {
+		t.Fatalf("AuthServID = %q", got)
+	}
+	if page := do(h, http.MethodGet, "/settings", nil).Body.String(); !strings.Contains(page, `name="inbox_authserv_id"`) ||
+		!strings.Contains(page, `value="mx.privateemail.com"`) {
+		t.Error("settings page doesn't show the authserv-id field and value")
+	}
+
+	for _, bad := range []string{"mx.example.com; dmarc=pass", "a b", "mx.example\r\n.com"} {
+		form.Set("inbox_authserv_id", bad)
+		if rec := postInbox(h, form); strings.Contains(rec.Body.String(), "enabled successfully") {
+			t.Errorf("authserv-id %q accepted", bad)
+		}
+	}
+	if got := s.cfg().Inbox.AuthServID; got != "mx.privateemail.com" {
+		t.Fatalf("rejected input changed AuthServID to %q", got)
+	}
+
+	form.Set("inbox_authserv_id", "")
+	postInbox(h, form)
+	if got := s.cfg().Inbox.AuthServID; got != "" {
+		t.Fatalf("blank didn't clear AuthServID: %q", got)
+	}
+}

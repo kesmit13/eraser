@@ -198,7 +198,7 @@
                             class="input" placeholder="993">
                     </div>
                 </div>
-                <p class="text-xs text-muted">Always connects with TLS. For a provider other than Gmail or Outlook, also set <code>inbox.authserv_id</code> in config.yaml, or no reply can be verified.</p>
+                <p class="text-xs text-muted">Always connects with TLS.</p>
 
                 <div>
                     <label for="inbox_email" class="label">Username</label>
@@ -225,6 +225,19 @@
                         value="{{if and .Config .Config.Inbox.Folder}}{{.Config.Inbox.Folder}}{{else}}INBOX{{end}}"
                         class="input" placeholder="INBOX" autocapitalize="off" spellcheck="false">
                     <p class="text-xs text-muted mt-1">The IMAP folder broker replies land in. Subfolders are often named like <code>INBOX.Eraser</code> or <code>INBOX/Eraser</code>.</p>
+                </div>
+
+                <div>
+                    <label for="inbox_authserv_id" class="label">Authserv-ID</label>
+                    <input type="text" name="inbox_authserv_id" id="inbox_authserv_id"
+                        value="{{if .Config}}{{.Config.Inbox.AuthServID}}{{end}}"
+                        class="input" placeholder="Not needed for Gmail or Outlook" autocapitalize="off" spellcheck="false">
+                    <p class="text-xs text-muted mt-1">
+                        Needed for any other provider, or no broker email counts as verified and its links are ignored.
+                        To find it, open the original source of an email you received from outside, find the topmost
+                        <code>Authentication-Results:</code> line, and copy the first word after the colon
+                        (e.g. <code>mx.example.com</code>). Only use a value your provider adds to every incoming message.
+                    </p>
                 </div>
 
                 <div class="flex items-center gap-3 pt-2">

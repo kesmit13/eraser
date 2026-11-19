@@ -649,6 +649,7 @@ func (s *Server) handleSettingsInbox(w http.ResponseWriter, r *http.Request) {
 	server := strings.ToLower(strings.TrimSpace(r.FormValue("inbox_server")))
 	portField := strings.TrimSpace(r.FormValue("inbox_port"))
 	folder := strings.TrimSpace(r.FormValue("inbox_folder"))
+	authServID := strings.ToLower(strings.TrimSpace(r.FormValue("inbox_authserv_id")))
 
 	// The form is prefilled with the saved values; blank means the default.
 	port := 993
@@ -664,6 +665,12 @@ func (s *Server) handleSettingsInbox(w http.ResponseWriter, r *http.Request) {
 		s.renderSettingsWithMessage(w, r, "Enter the IMAP server as a host name, like imap.example.com (port goes in its own field)", false)
 		return
 	}
+	// The authserv-id decides whose Authentication-Results header is
+	// trusted, so accept only a plain host-like token (blank: none set).
+	if authServID != "" && !validHostname(authServID) {
+		s.renderSettingsWithMessage(w, r, "Enter the authserv-id as it appears in the header, like mx.example.com", false)
+		return
+	}
 	if folder == "" {
 		folder = "INBOX"
 	}
@@ -676,8 +683,7 @@ func (s *Server) handleSettingsInbox(w http.ResponseWriter, r *http.Request) {
 	errNewServer := errors.New("password required for a new account or server")
 	err := s.updateConfig(func(c *config.Config) error {
 		inbox := c.Inbox
-		// Update only the fields this form owns; keep archive settings and
-		// authserv_id. The provider of a server already in config.yaml is
+		// Update only the fields this form owns; keep archive settings. The provider of a server already in config.yaml is
 		// kept; a newly entered server gets its provider from its host name
 		// (it decides whose Authentication-Results are trusted).
 		switch {
@@ -706,6 +712,7 @@ func (s *Server) handleSettingsInbox(w http.ResponseWriter, r *http.Request) {
 		inbox.Password = password
 		inbox.Port = port
 		inbox.Folder = folder
+		inbox.AuthServID = authServID
 		c.Inbox = inbox
 		return nil
 	})
@@ -904,8 +911,8 @@ func writeUnverifiedNotice(w http.ResponseWriter, m *inbox.Monitor) {
 	}
 	_, _ = w.Write([]byte(`
 		<div class="bg-yellow-100 border border-yellow-400 text-yellow-800 px-4 py-3 rounded mb-2">
-			<strong>Can't verify senders.</strong> Set <code>inbox.authserv_id</code> in config.yaml
-			(see config.example.yaml). Until then, links in broker email are ignored.
+			<strong>Can't verify senders.</strong> Set the authserv-id in Settings → Inbox
+			(or <code>inbox.authserv_id</code> in config.yaml). Until then, links in broker email are ignored.
 		</div>
 	`))
 }
