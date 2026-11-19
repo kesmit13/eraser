@@ -351,6 +351,19 @@ type BrokerStatus struct {
 	LastSent  time.Time
 	Status    Status
 	TotalSent int
+	Addresses map[string]bool // every address tried, lowercase
+}
+
+// Recipient is one broker at one address. The resend window is per
+// recipient, so correcting a broker's address makes it eligible again.
+type Recipient struct {
+	BrokerID string
+	Email    string // lowercase
+}
+
+// RecipientOf returns the Recipient for a broker ID and address.
+func RecipientOf(brokerID, email string) Recipient {
+	return Recipient{BrokerID: brokerID, Email: strings.ToLower(strings.TrimSpace(email))}
 }
 
 // GetAllBrokerStatuses returns each broker's most recent attempt and count.
@@ -358,10 +371,14 @@ type BrokerStatus struct {
 // text, and text comparison is wrong across time zones.
 func (s *Store) GetAllBrokerStatuses() (map[string]BrokerStatus, error) {
 	statuses := make(map[string]BrokerStatus)
-	err := s.eachSend(`SELECT broker_id, status, sent_at FROM removal_requests`, func(brokerID string, status Status, at time.Time) {
+	err := s.eachSend(`SELECT broker_id, email, status, sent_at FROM removal_requests`, func(brokerID, email string, status Status, at time.Time) {
 		bs := statuses[brokerID]
 		bs.BrokerID = brokerID
 		bs.TotalSent++
+		if bs.Addresses == nil {
+			bs.Addresses = make(map[string]bool)
+		}
+		bs.Addresses[RecipientOf(brokerID, email).Email] = true
 		if bs.LastSent.IsZero() || !at.Before(bs.LastSent) {
 			bs.LastSent, bs.Status = at, status
 		}
@@ -373,12 +390,14 @@ func (s *Store) GetAllBrokerStatuses() (map[string]BrokerStatus, error) {
 	return statuses, nil
 }
 
-// LastSuccessfulSends maps broker ID to the time of its latest successful send.
-func (s *Store) LastSuccessfulSends() (map[string]time.Time, error) {
-	last := make(map[string]time.Time)
-	err := s.eachSend(`SELECT broker_id, status, sent_at FROM removal_requests WHERE status = 'sent'`, func(brokerID string, _ Status, at time.Time) {
-		if at.After(last[brokerID]) {
-			last[brokerID] = at
+// LastSuccessfulSends maps each broker and address to the time of its latest
+// successful send.
+func (s *Store) LastSuccessfulSends() (map[Recipient]time.Time, error) {
+	last := make(map[Recipient]time.Time)
+	err := s.eachSend(`SELECT broker_id, email, status, sent_at FROM removal_requests WHERE status = 'sent'`, func(brokerID, email string, _ Status, at time.Time) {
+		r := RecipientOf(brokerID, email)
+		if at.After(last[r]) {
+			last[r] = at
 		}
 	})
 	if err != nil {
@@ -390,7 +409,7 @@ func (s *Store) LastSuccessfulSends() (map[string]time.Time, error) {
 // CountSentSince counts successful sends at or after t (used for daily caps).
 func (s *Store) CountSentSince(t time.Time) (int, error) {
 	n := 0
-	err := s.eachSend(`SELECT broker_id, status, sent_at FROM removal_requests WHERE status = 'sent'`, func(_ string, _ Status, at time.Time) {
+	err := s.eachSend(`SELECT broker_id, email, status, sent_at FROM removal_requests WHERE status = 'sent'`, func(_, _ string, _ Status, at time.Time) {
 		if !at.Before(t) {
 			n++
 		}
@@ -402,7 +421,7 @@ func (s *Store) CountSentSince(t time.Time) (int, error) {
 }
 
 // eachSend runs a (broker_id, status, sent_at) query and parses sent_at in Go.
-func (s *Store) eachSend(query string, fn func(brokerID string, status Status, at time.Time)) error {
+func (s *Store) eachSend(query string, fn func(brokerID, email string, status Status, at time.Time)) error {
 	rows, err := s.db.Query(query)
 	if err != nil {
 		return err
@@ -410,16 +429,16 @@ func (s *Store) eachSend(query string, fn func(brokerID string, status Status, a
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
-		var brokerID, status string
+		var brokerID, email, status string
 		var raw any
-		if err := rows.Scan(&brokerID, &status, &raw); err != nil {
+		if err := rows.Scan(&brokerID, &email, &status, &raw); err != nil {
 			return err
 		}
 		at, err := parseDBTime(raw)
 		if err != nil {
 			return fmt.Errorf("broker %s: %w", brokerID, err)
 		}
-		fn(brokerID, Status(status), at)
+		fn(brokerID, email, Status(status), at)
 	}
 	return rows.Err()
 }

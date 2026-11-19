@@ -1212,7 +1212,9 @@ func (s *Server) getBrokersWithStatus(search, category, region, statusFilter str
 			Status: "never",
 		}
 
-		if status, ok := brokerStatuses[b.ID]; ok {
+		// Sends to an address since corrected don't count: the broker is
+		// pending again at its new address (as in sendplan).
+		if status, ok := brokerStatuses[b.ID]; ok && status.Addresses[history.RecipientOf(b.ID, b.Email).Email] {
 			bws.Status = string(status.Status)
 			bws.TotalSent = status.TotalSent
 			if !status.LastSent.IsZero() {

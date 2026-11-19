@@ -426,3 +426,22 @@ func TestDryRunBlocksWebSends(t *testing.T) {
 		t.Errorf("preview in dry run: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// A broker whose address was corrected after a send counts as not yet sent:
+// the default "pending" filter and the plan both include it.
+func TestSendAllIncludesBrokerWithCorrectedAddress(t *testing.T) {
+	moved := broker.Broker{ID: "moved", Name: "Moved", Email: "dsr@moved.example", Region: "us"}
+	f := newSendFixture(t, config.Options{}, []broker.Broker{moved})
+	if err := f.store.Add(&history.Record{BrokerID: "moved", BrokerName: "Moved", Email: "privacy@moved.example",
+		Template: "generic", Status: history.StatusSent, SentAt: time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	body, code := f.sendAll(t)
+	if code != http.StatusOK {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	f.waitForJob(t, body["job_id"].(string))
+	if got := f.sender.recipients(); strings.Join(got, ",") != "dsr@moved.example" {
+		t.Fatalf("sent to %v, want the corrected address", got)
+	}
+}

@@ -16,12 +16,14 @@ import (
 )
 
 type fakeHistory struct {
-	last   map[string]time.Time
+	last   map[history.Recipient]time.Time
 	window int
 }
 
-func (f fakeHistory) LastSuccessfulSends() (map[string]time.Time, error) { return f.last, nil }
-func (f fakeHistory) CountSentSince(time.Time) (int, error)              { return f.window, nil }
+func (f fakeHistory) LastSuccessfulSends() (map[history.Recipient]time.Time, error) {
+	return f.last, nil
+}
+func (f fakeHistory) CountSentSince(time.Time) (int, error) { return f.window, nil }
 
 func TestForConfigAppliesFiltersThenRules(t *testing.T) {
 	candidates := []broker.Broker{
@@ -33,7 +35,7 @@ func TestForConfigAppliesFiltersThenRules(t *testing.T) {
 		{ID: "global", Name: "Global", Region: "global"},
 	}
 	opts := config.Options{Regions: []string{"us"}, ExcludedBrokers: []string{"excluded"}}
-	h := fakeHistory{last: map[string]time.Time{"recent": now.Add(-time.Hour)}, window: 5}
+	h := fakeHistory{last: sentAt(map[string]time.Time{"recent": now.Add(-time.Hour)}), window: 5}
 
 	p, err := ForConfig(candidates, opts, h, now, 0, false)
 	if err != nil {
@@ -107,7 +109,7 @@ func TestDeliverSendsAndRecords(t *testing.T) {
 		t.Error("date of birth sent without being disclosed")
 	}
 	last, err := d.Store.LastSuccessfulSends()
-	if err != nil || last["acme"].IsZero() {
+	if err != nil || last[history.RecipientOf("acme", acme.Email)].IsZero() {
 		t.Fatalf("send not recorded in history: %v %v", last, err)
 	}
 }
@@ -122,7 +124,7 @@ func TestDeliverRecordsFailures(t *testing.T) {
 	if rec.Status != history.StatusFailed || !strings.Contains(rec.Error, "authentication") || rec.Template != "generic" {
 		t.Errorf("record = %+v", rec)
 	}
-	if last, _ := d.Store.LastSuccessfulSends(); !last["acme"].IsZero() {
+	if last, _ := d.Store.LastSuccessfulSends(); !last[history.RecipientOf("acme", acme.Email)].IsZero() {
 		t.Error("failed send counted as successful")
 	}
 }
