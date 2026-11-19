@@ -146,11 +146,12 @@ func TestLastSuccessfulSends(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := last["failed-only"]; ok {
+	if _, ok := last[RecipientOf("failed-only", "failed-only@example.com")]; ok {
 		t.Error("failed sends must not count as sent")
 	}
-	if d := last["sent-twice"].Sub(now.Add(-time.Hour)); d < -time.Second || d > time.Second {
-		t.Errorf("last sent = %v, want the most recent send", last["sent-twice"])
+	twice := RecipientOf("sent-twice", "sent-twice@example.com")
+	if d := last[twice].Sub(now.Add(-time.Hour)); d < -time.Second || d > time.Second {
+		t.Errorf("last sent = %v, want the most recent send", last[twice])
 	}
 }
 
@@ -332,5 +333,34 @@ func TestCompletePendingTaskRejectsUnknownStatus(t *testing.T) {
 		if err := s.CompletePendingTask(task.ID, status); err != nil {
 			t.Errorf("status %q: %v", status, err)
 		}
+	}
+}
+
+// The resend window is per address: a send to a broker's old address doesn't
+// count for its new one. Addresses compare case-insensitively.
+func TestLastSuccessfulSendsPerAddress(t *testing.T) {
+	s := newTestStore(t)
+	at := time.Now().Add(-time.Hour)
+	if err := s.Add(&Record{BrokerID: "moved", BrokerName: "Moved", Email: "Privacy@Moved.example",
+		Template: "generic", Status: StatusSent, SentAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	last, err := s.LastSuccessfulSends()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last[RecipientOf("moved", "privacy@moved.example")].IsZero() {
+		t.Errorf("send to the old address not found: %v", last)
+	}
+	if !last[RecipientOf("moved", "dsr@moved.example")].IsZero() {
+		t.Error("send to the old address counted for the new one")
+	}
+
+	statuses, err := s.GetAllBrokerStatuses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := statuses["moved"]; !st.Addresses["privacy@moved.example"] || st.Addresses["dsr@moved.example"] {
+		t.Errorf("Addresses = %v", st.Addresses)
 	}
 }

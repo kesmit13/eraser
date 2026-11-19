@@ -8,6 +8,7 @@ import (
 
 	"github.com/eraser-privacy/eraser/internal/broker"
 	"github.com/eraser-privacy/eraser/internal/config"
+	"github.com/eraser-privacy/eraser/internal/history"
 )
 
 // Window is the period the daily cap covers. Gmail's sending limit is a
@@ -34,7 +35,7 @@ type Plan struct {
 
 // History is the send history a plan is built from.
 type History interface {
-	LastSuccessfulSends() (map[string]time.Time, error)
+	LastSuccessfulSends() (map[history.Recipient]time.Time, error)
 	CountSentSince(t time.Time) (int, error)
 }
 
@@ -68,7 +69,7 @@ func WindowStart(now time.Time) time.Time {
 
 // Build applies resend and cap rules. lastSent maps broker ID to the time of
 // its latest successful send; sentInWindow counts sends since WindowStart(now).
-func Build(candidates []broker.Broker, lastSent map[string]time.Time, sentInWindow int, opts Options) Plan {
+func Build(candidates []broker.Broker, lastSent map[history.Recipient]time.Time, sentInWindow int, opts Options) Plan {
 	var p Plan
 	p.RemainingToday = max(opts.DailyLimit-sentInWindow, 0)
 
@@ -79,7 +80,8 @@ func Build(candidates []broker.Broker, lastSent map[string]time.Time, sentInWind
 	}
 
 	for _, b := range candidates {
-		if at, ok := lastSent[b.ID]; ok && !opts.ForceResend && at.After(cutoff) {
+		// Per address: a send to an address since corrected doesn't count.
+		if at, ok := lastSent[history.RecipientOf(b.ID, b.Email)]; ok && !opts.ForceResend && at.After(cutoff) {
 			p.SkippedRecent = append(p.SkippedRecent, b)
 			continue
 		}
