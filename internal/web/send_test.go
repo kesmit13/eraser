@@ -445,3 +445,37 @@ func TestSendAllIncludesBrokerWithCorrectedAddress(t *testing.T) {
 		t.Fatalf("sent to %v, want the corrected address", got)
 	}
 }
+
+// Dashboard counts are per broker at its current address, like the broker
+// list: a send to a corrected address doesn't count, and a broker sent to
+// twice counts once.
+func TestDashboardStatsPerBrokerAtCurrentAddress(t *testing.T) {
+	bs := []broker.Broker{
+		{ID: "moved", Name: "Moved", Email: "dsr@moved.example", Region: "us"},
+		{ID: "twice", Name: "Twice", Email: "privacy@twice.example", Region: "us"},
+		{ID: "failed", Name: "Failed", Email: "privacy@failed.example", Region: "us"},
+		{ID: "never", Name: "Never", Email: "privacy@never.example", Region: "us"},
+	}
+	f := newSendFixture(t, config.Options{}, bs)
+	at := time.Now().Add(-time.Hour)
+	for _, r := range []history.Record{
+		{BrokerID: "moved", Email: "privacy@moved.example", Status: history.StatusSent},
+		{BrokerID: "twice", Email: "privacy@twice.example", Status: history.StatusSent},
+		{BrokerID: "twice", Email: "privacy@twice.example", Status: history.StatusSent},
+		{BrokerID: "failed", Email: "privacy@failed.example", Status: history.StatusFailed},
+	} {
+		r.BrokerName, r.Template, r.SentAt = r.BrokerID, "generic", at
+		if err := f.store.Add(&r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := f.s.getStats(), (Stats{TotalBrokers: 4, Sent: 1, Failed: 1, Pending: 2}); got != want {
+		t.Errorf("stats = %+v, want %+v", got, want)
+	}
+
+	// The activity log shows where each email went, so the old send reads as such.
+	page := do(f.h, http.MethodGet, "/", nil).Body.String()
+	if !strings.Contains(page, "privacy@moved.example") {
+		t.Error("recent activity doesn't show the address an email went to")
+	}
+}

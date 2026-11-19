@@ -227,7 +227,7 @@
                     {{end}}
                     <div class="flex-1 min-w-0">
                         <p class="text-sm font-medium text-primary truncate">{{.BrokerName}}</p>
-                        <p class="text-xs text-muted">{{formatDate .SentAt}}</p>
+                        <p class="text-xs text-muted truncate">{{.Email}} · {{formatDate .SentAt}}</p>
                     </div>
                     {{if eq .Status "sent"}}
                     <span class="badge badge-success">Sent</span>
