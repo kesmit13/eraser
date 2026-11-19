@@ -35,6 +35,16 @@ add:
     category: data-broker
     source_url: https://www.adttribution.com/opt-out/
     registry_id: "1239"
+  - id: 6sense-insights
+    name: 6sense Insights, Inc.
+    email: datasubjectrequests@6sense.com
+    website: https://6sense.com
+    opt_out_url: https://6sense.com/privacy-policy/
+    region: us
+    category: data-broker
+    notes: Its privacy policy's data-rights section asks for requests at this address.
+    source_url: https://6sense.com/privacy-policy/
+    registry_id: "1065"
   - id: 5x5-us
     name: 5x5 US, LLC
     email: privacy@5x5coop.com
@@ -144,6 +154,9 @@ exclude:
   - email: hello@adttrbution.com
     reason: Mistyped domain (adttrbution.com) with no mail host; re-added above with the site's privacy address.
     source_url: https://www.adttribution.com/opt-out/
+  - email: privacy@6sense.com
+    reason: 6sense's privacy policy asks for data subject requests at datasubjectrequests@6sense.com (re-added above).
+    source_url: https://6sense.com/privacy-policy/
   - email: contact@join5x5.com
     reason: join5x5.com has no mail host; re-added above with the privacy address from 5x5's consumer notice.
     source_url: https://5x5data.com/privacy-policy-consumer/
