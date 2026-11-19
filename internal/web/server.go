@@ -1260,23 +1260,19 @@ func (s *Server) getUniqueRegions() []string {
 }
 
 func (s *Server) getStats() Stats {
-	stats := Stats{
-		TotalBrokers: len(s.brokerDB.Brokers),
-	}
-
-	if s.historyStore != nil {
-		_, sent, failed, err := s.historyStore.GetStats()
-		if err == nil {
-			stats.Sent = sent
-			stats.Failed = failed
+	// Per broker at its current address, as on the broker list: history rows
+	// would count resends twice and sends to a since-corrected address.
+	stats := Stats{TotalBrokers: len(s.brokerDB.Brokers)}
+	for _, b := range s.getBrokersWithStatus("", "", "", "") {
+		switch b.Status {
+		case string(history.StatusSent):
+			stats.Sent++
+		case string(history.StatusFailed):
+			stats.Failed++
+		default:
+			stats.Pending++
 		}
 	}
-
-	stats.Pending = stats.TotalBrokers - stats.Sent - stats.Failed
-	if stats.Pending < 0 {
-		stats.Pending = 0
-	}
-
 	return stats
 }
 
