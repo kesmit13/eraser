@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/eraser-privacy/eraser/internal/broker"
 	"github.com/eraser-privacy/eraser/internal/browser"
@@ -645,31 +646,73 @@ func (s *Server) handleSettingsInbox(w http.ResponseWriter, r *http.Request) {
 
 	email := strings.TrimSpace(r.FormValue("inbox_email"))
 	password := strings.TrimSpace(r.FormValue("inbox_password"))
+	server := strings.ToLower(strings.TrimSpace(r.FormValue("inbox_server")))
+	portField := strings.TrimSpace(r.FormValue("inbox_port"))
+	folder := strings.TrimSpace(r.FormValue("inbox_folder"))
+	authServID := strings.ToLower(strings.TrimSpace(r.FormValue("inbox_authserv_id")))
+
+	// The form is prefilled with the saved values; blank means the default.
+	port := 993
+	if portField != "" {
+		n, convErr := strconv.Atoi(portField)
+		if convErr != nil || n < 1 || n > 65535 {
+			s.renderSettingsWithMessage(w, r, "Enter a port between 1 and 65535", false)
+			return
+		}
+		port = n
+	}
+	if server != "" && !validHostname(server) {
+		s.renderSettingsWithMessage(w, r, "Enter the IMAP server as a host name, like imap.example.com (port goes in its own field)", false)
+		return
+	}
+	// The authserv-id decides whose Authentication-Results header is
+	// trusted, so accept only a plain host-like token (blank: none set).
+	if authServID != "" && !validHostname(authServID) {
+		s.renderSettingsWithMessage(w, r, "Enter the authserv-id as it appears in the header, like mx.example.com", false)
+		return
+	}
+	if folder == "" {
+		folder = "INBOX"
+	}
+	if strings.ContainsFunc(folder, unicode.IsControl) {
+		s.renderSettingsWithMessage(w, r, "The folder name contains invalid characters", false)
+		return
+	}
 
 	errMissing := errors.New("email and password are required")
+	errNewServer := errors.New("password required for a new account or server")
 	err := s.updateConfig(func(c *config.Config) error {
 		inbox := c.Inbox
+		// Update only the fields this form owns; keep archive settings. The provider of a server already in config.yaml is
+		// kept; a newly entered server gets its provider from its host name
+		// (it decides whose Authentication-Results are trusted).
+		switch {
+		case server != "" && !strings.EqualFold(server, inbox.Server):
+			inbox.Provider, inbox.Server = providerForServer(server), server
+		case inbox.Server == "":
+			inbox.Provider, inbox.Server = "gmail", "imap.gmail.com"
+		}
+		serverChanged := !strings.EqualFold(inbox.Server, c.Inbox.Server)
+
 		// The page never shows the saved password, so a blank field means
-		// "keep it", but only for the same account.
-		if password == "" && inbox.Password != "" && strings.EqualFold(email, inbox.Email) {
+		// "keep it", but only for the same account on the same server:
+		// otherwise it would be sent to a server it wasn't meant for.
+		if password == "" && inbox.Password != "" {
+			if !strings.EqualFold(email, inbox.Email) || serverChanged {
+				return errNewServer
+			}
 			password = inbox.Password
 		}
 		if email == "" || password == "" {
 			return errMissing
 		}
 
-		// Update only the fields this form owns; keep folder and archive
-		// settings, and the provider of a server set in config.yaml (it
-		// decides whose Authentication-Results are trusted).
 		inbox.Enabled = true
 		inbox.Email = email
 		inbox.Password = password
-		if inbox.Server == "" {
-			inbox.Provider, inbox.Server, inbox.Port = "gmail", "imap.gmail.com", 993
-		}
-		if inbox.Folder == "" {
-			inbox.Folder = "INBOX"
-		}
+		inbox.Port = port
+		inbox.Folder = folder
+		inbox.AuthServID = authServID
 		c.Inbox = inbox
 		return nil
 	})
@@ -677,12 +720,38 @@ func (s *Server) handleSettingsInbox(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errMissing):
 		s.renderSettingsWithMessage(w, r, "Email and password are required", false)
 		return
+	case errors.Is(err, errNewServer):
+		s.renderSettingsWithMessage(w, r, "Enter the password for this account and server", false)
+		return
 	case err != nil:
 		s.renderSettingsWithMessage(w, r, "Failed to save configuration: "+err.Error(), false)
 		return
 	}
 
 	s.renderSettingsWithMessage(w, r, "Inbox monitoring enabled successfully!", true)
+}
+
+// providerForServer labels Gmail's and Outlook's own IMAP hosts, whose
+// authserv-ids Eraser knows (inbox.AuthServFor); any other host is "imap".
+func providerForServer(server string) string {
+	switch server {
+	case "imap.gmail.com":
+		return "gmail"
+	case "outlook.office365.com", "imap-mail.outlook.com":
+		return "outlook"
+	}
+	return "imap"
+}
+
+// validHostname reports whether h is a plain DNS name: letters, digits, dots
+// and hyphens, no port, scheme or path.
+func validHostname(h string) bool {
+	if h == "" || len(h) > 253 || strings.HasPrefix(h, ".") || strings.HasPrefix(h, "-") {
+		return false
+	}
+	return !strings.ContainsFunc(h, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '.' && r != '-'
+	})
 }
 
 func (s *Server) renderSettingsWithMessage(w http.ResponseWriter, r *http.Request, message string, success bool) {
@@ -842,8 +911,8 @@ func writeUnverifiedNotice(w http.ResponseWriter, m *inbox.Monitor) {
 	}
 	_, _ = w.Write([]byte(`
 		<div class="bg-yellow-100 border border-yellow-400 text-yellow-800 px-4 py-3 rounded mb-2">
-			<strong>Can't verify senders.</strong> Set <code>inbox.authserv_id</code> in config.yaml
-			(see config.example.yaml). Until then, links in broker email are ignored.
+			<strong>Can't verify senders.</strong> Set the authserv-id in Settings → Inbox
+			(or <code>inbox.authserv_id</code> in config.yaml). Until then, links in broker email are ignored.
 		</div>
 	`))
 }
