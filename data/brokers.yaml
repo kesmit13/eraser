@@ -48,13 +48,14 @@ brokers:
       registry_id: "1475"
     - id: 6sense-insights
       name: 6sense Insights, Inc.
-      email: privacy@6sense.com
+      email: datasubjectrequests@6sense.com
       website: https://6sense.com
       opt_out_url: https://6sense.com/privacy-policy/
       region: us
       category: data-broker
-      source: ca-cppa
-      source_url: https://cppa.ca.gov/data_broker_registry/
+      notes: Its privacy policy's data-rights section asks for requests at this address.
+      source: manual
+      source_url: https://6sense.com/privacy-policy/
       registry_id: "1065"
     - id: above-data
       name: Above Data
