@@ -35,6 +35,10 @@ options:
   # Template to use: "gdpr", "ccpa", or "generic"
   template: generic
 
+  # Preview only: `eraser send` prints what it would send, and the web UI
+  # refuses to send. Restart `eraser serve` after changing it.
+  dry_run: false
+
   # Profile fields to include in removal emails. Name and email are always
   # sent; nothing else is unless listed here. Two data points are generally
   # enough for a broker to verify a deletion request, so start with none and

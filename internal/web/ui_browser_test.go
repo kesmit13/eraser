@@ -238,8 +238,14 @@ func TestUIWorksUnderCSP(t *testing.T) {
 
 	// Send to All: the job runs and the page shows its result. Pending are c
 	// (never sent) and b (its failed record was cleared above).
+	// The button first shows a preview; nothing is sent until it's confirmed.
 	f.visit(t, "/brokers")
 	f.click(t, `[data-action="send-all"]`)
+	f.waitFor(t, "send-all preview", `document.getElementById('send-all-progress').textContent.includes('Ready to send 2 emails')`)
+	if got := f.sender.recipients(); len(got) != 0 {
+		t.Fatalf("preview sent to %v", got)
+	}
+	f.click(t, `[data-action="send-all-confirm"]`)
 	f.waitFor(t, "send-all completion", `document.getElementById('send-all-progress').textContent.includes('Complete!')`)
 	if got := f.sender.recipients(); !slices.Equal(got, []string{"privacy@b.example", "privacy@c.example"}) {
 		t.Errorf("sent to %v, want b and c", got)
@@ -254,6 +260,8 @@ func TestUIShowsSendJobError(t *testing.T) {
 	f.sender.setOnSend(func() { _ = f.store.Close() })
 
 	f.click(t, `[data-action="send-all"]`)
+	f.waitFor(t, "send-all preview", `document.querySelector('[data-action="send-all-confirm"]') !== null`)
+	f.click(t, `[data-action="send-all-confirm"]`)
 	f.waitFor(t, "send-all to stop", `document.getElementById('send-all-progress').textContent.includes('Stopped')`)
 	text := eval[string](t, f, `document.getElementById('send-all-progress').textContent`)
 	if strings.Contains(text, "Complete!") || !strings.Contains(text, "may have been sent") {

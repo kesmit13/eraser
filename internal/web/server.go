@@ -389,6 +389,7 @@ func (s *Server) setupRouter() *chi.Mux {
 		r.Get("/history", s.handleAPIHistory)
 		r.Delete("/history/failed", s.handleAPIDeleteFailed)
 		r.Post("/send/{brokerID}", s.handleAPISendOne)
+		r.Get("/send-all/preview", s.handleAPISendAllPreview)
 		r.Post("/send-all", s.handleAPISendAll)
 		r.Get("/job/active", s.handleAPIJobActive)
 		r.Get("/job/{jobID}/status", s.handleAPIJobStatus)
@@ -769,6 +770,11 @@ func (s *Server) handleAPISendOne(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<span class="text-red-600">Email not configured. <a href="/setup" class="underline">Configure now</a></span>`))
 		return
 	}
+	if cfg.Options.DryRun {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`<span class="text-yellow-600">` + dryRunMessage + `</span>`))
+		return
+	}
 
 	// Held through the send, so the plan below can't go stale.
 	s.sendMu.Lock()
@@ -859,6 +865,76 @@ func (s *Server) deliverer(cfg *config.Config) (sendplan.Deliverer, config.Discl
 }
 
 // skipReason explains why a plan has nothing to send.
+// dryRunMessage explains why the web UI refuses to send.
+const dryRunMessage = "Dry run is on (options.dry_run in your config), so nothing is sent. Set it to false and restart to send."
+
+// planSendAll plans "Send all" for the broker page's filters (search,
+// category, region, status; status defaults to "pending", never sent) with
+// the same rules as the CLI: config filters, resend window, daily cap.
+func (s *Server) planSendAll(cfg *config.Config, r *http.Request) (sendplan.Plan, error) {
+	status := r.FormValue("status")
+	if status == "" {
+		status = "pending"
+	}
+	var candidates []broker.Broker
+	for _, b := range s.getBrokersWithStatus(r.FormValue("search"), r.FormValue("category"), r.FormValue("region"), status) {
+		candidates = append(candidates, b.Broker)
+	}
+	return sendplan.ForConfig(candidates, cfg.Options, s.historyStore, time.Now(), 0, false)
+}
+
+// handleAPISendAllPreview shows what "Send all" would send. It sends nothing.
+func (s *Server) handleAPISendAllPreview(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfg()
+	w.Header().Set("Content-Type", "application/json")
+	writeErr := func(code int, msg string) {
+		w.WriteHeader(code)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	}
+	if cfg == nil || cfg.Email.Provider == "" {
+		writeErr(http.StatusBadRequest, "Email not configured. Please configure email settings first.")
+		return
+	}
+	disclose, err := cfg.Options.Disclosure()
+	if err != nil {
+		writeErr(http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := s.planSendAll(cfg, r)
+	if err != nil {
+		writeErr(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	type previewBroker struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	}
+	brokers := make([]previewBroker, 0, len(plan.Send))
+	for _, b := range plan.Send {
+		brokers = append(brokers, previewBroker{ID: b.ID, Name: b.Name, Email: b.Email})
+	}
+	resp := map[string]interface{}{
+		"total":          len(plan.Send),
+		"brokers":        brokers,
+		"skipped_recent": len(plan.SkippedRecent),
+		"resend_days":    cfg.Options.EffectiveResendAfterDays(),
+		"deferred":       plan.Deferred,
+		"daily_limit":    cfg.Options.EffectiveDailyLimit(),
+		"sent_in_window": plan.SentInWindow,
+		"sending_fields": disclose.Fields(),
+		"withheld":       disclose.Withheld(cfg.Profile),
+		"template":       cfg.Options.Template,
+		"from":           cfg.Email.From,
+		"dry_run":        cfg.Options.DryRun,
+	}
+	if len(plan.Send) == 0 {
+		resp["message"] = skipReason(plan, cfg.Options)
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 func skipReason(plan sendplan.Plan, opts config.Options) string {
 	switch {
 	case len(plan.SkippedRecent) > 0 && plan.Deferred == 0:
@@ -902,21 +978,17 @@ func (s *Server) handleAPISendAll(w http.ResponseWriter, r *http.Request) {
 		writeErr(http.StatusBadRequest, "Email not configured. Please configure email settings first.")
 		return
 	}
-
-	// Get filter parameters from form
-	search := r.FormValue("search")
-	category := r.FormValue("category")
-	region := r.FormValue("region")
-	status := r.FormValue("status")
-
-	// If no status filter specified, default to pending (never sent)
-	if status == "" {
-		status = "pending"
+	if cfg.Options.DryRun {
+		writeErr(http.StatusBadRequest, dryRunMessage)
+		return
 	}
 
-	var candidates []broker.Broker
-	for _, b := range s.getBrokersWithStatus(search, category, region, status) {
-		candidates = append(candidates, b.Broker)
+	// The number of emails the user agreed to in the preview. The plan can
+	// shrink in between (another send), but never grow past it.
+	confirmed, err := strconv.Atoi(r.FormValue("confirmed"))
+	if err != nil || confirmed < 0 {
+		writeErr(http.StatusBadRequest, "Review the list of brokers before sending.")
+		return
 	}
 
 	d, disclose, err := s.deliverer(cfg)
@@ -925,14 +997,17 @@ func (s *Server) handleAPISendAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Same rules as the CLI: config filters, resend window, daily cap.
-	plan, err := sendplan.ForConfig(candidates, cfg.Options, s.historyStore, time.Now(), 0, false)
+	plan, err := s.planSendAll(cfg, r)
 	if err != nil {
 		writeErr(http.StatusInternalServerError, err.Error())
 		return
 	}
 	if len(plan.Send) == 0 {
 		writeErr(http.StatusBadRequest, skipReason(plan, cfg.Options))
+		return
+	}
+	if len(plan.Send) > confirmed {
+		writeErr(http.StatusConflict, fmt.Sprintf("The list changed since you reviewed it (%d emails now, %d confirmed). Review it again.", len(plan.Send), confirmed))
 		return
 	}
 
