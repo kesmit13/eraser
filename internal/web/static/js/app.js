@@ -50,24 +50,111 @@
         }
     }
 
-    async function startSendAll() {
+    // The broker page's filters. The preview and the send use the same ones,
+    // so they plan the same list.
+    function sendAllFilters() {
+        return {
+            search: byId('broker-search').value,
+            category: document.querySelector('[name="category"]').value,
+            region: document.querySelector('[name="region"]').value,
+        };
+    }
+
+    // "Send to All" first shows what would be sent; only the confirm button
+    // in that preview starts sending.
+    async function previewSendAll() {
+        const btn = byId('send-all-btn');
+        btn.disabled = true;
+        byId('send-all-text').textContent = 'Checking...';
+        byId('send-all-spinner').classList.remove('hidden');
+
+        const filters = sendAllFilters();
+        try {
+            const resp = await fetch('/api/send-all/preview?' + new URLSearchParams(filters));
+            const data = await resp.json();
+            resetButton();
+            if (!resp.ok) {
+                showError(data.error || 'Failed to load the preview');
+                return;
+            }
+            showPreview(data, filters);
+        } catch (err) {
+            showError('Network error: ' + err.message);
+            resetButton();
+        }
+    }
+
+    function showPreview(p, filters) {
+        const area = byId('send-all-progress');
+        area.innerHTML = `
+            <div class="card p-4" id="send-preview">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="font-medium text-primary preview-title"></span>
+                    <button data-action="send-all-dismiss" class="btn btn-ghost text-sm py-1 px-3">Close</button>
+                </div>
+                <ul class="text-sm text-secondary space-y-1 mb-3 preview-notes"></ul>
+                <details class="mb-3">
+                    <summary class="text-sm text-accent cursor-pointer">Show brokers</summary>
+                    <ul class="text-xs text-muted mt-2 max-h-64 overflow-y-auto preview-brokers"></ul>
+                </details>
+                <div class="flex gap-3 preview-actions"></div>
+            </div>
+        `;
+        // textContent, not innerHTML: broker names and config values are data.
+        const title = p.dry_run
+            ? `Dry run: would send ${p.total} email${p.total === 1 ? '' : 's'} (nothing is sent)`
+            : `Ready to send ${p.total} email${p.total === 1 ? '' : 's'}`;
+        area.querySelector('.preview-title').textContent = title;
+
+        const notes = [];
+        if (p.message) notes.push(p.message);
+        if (p.from) notes.push(`From: ${p.from}${p.template ? ` (template: ${p.template})` : ''}`);
+        if (p.sending_fields && p.sending_fields.length) notes.push(`Sends your: ${p.sending_fields.join(', ')}`);
+        if (p.withheld && p.withheld.length) notes.push(`Withheld: ${p.withheld.join(', ')} (some brokers ask for more via their own disclose list)`);
+        if (p.skipped_recent) notes.push(`Skipping ${p.skipped_recent} sent to in the last ${p.resend_days} days`);
+        if (p.deferred) notes.push(`Holding back ${p.deferred} for later (daily limit ${p.daily_limit}, ${p.sent_in_window} sent in the last 24h)`);
+        if (p.dry_run) notes.push('options.dry_run is on in your config. Set it to false and restart to send.');
+        const noteList = area.querySelector('.preview-notes');
+        for (const n of notes) {
+            const li = document.createElement('li');
+            li.textContent = n;
+            noteList.appendChild(li);
+        }
+
+        const brokerList = area.querySelector('.preview-brokers');
+        for (const b of p.brokers || []) {
+            const li = document.createElement('li');
+            li.textContent = `${b.name} <${b.email}>`;
+            brokerList.appendChild(li);
+        }
+
+        if (p.total > 0 && !p.dry_run) {
+            const send = document.createElement('button');
+            send.className = 'btn btn-primary';
+            send.dataset.action = 'send-all-confirm';
+            send.dataset.count = String(p.total);
+            // Send for the filters that were previewed, even if they've changed since.
+            send.dataset.filters = JSON.stringify(filters);
+            send.textContent = `Send ${p.total} email${p.total === 1 ? '' : 's'}`;
+            area.querySelector('.preview-actions').appendChild(send);
+        }
+    }
+
+    async function startSendAll(confirmBtn) {
         const btn = byId('send-all-btn');
         const btnText = byId('send-all-text');
         const spinner = byId('send-all-spinner');
 
+        confirmBtn.disabled = true;
         btn.disabled = true;
         btnText.textContent = 'Starting...';
         spinner.classList.remove('hidden');
-
-        const search = byId('broker-search').value;
-        const category = document.querySelector('[name="category"]').value;
-        const region = document.querySelector('[name="region"]').value;
 
         try {
             const resp = await fetch('/api/send-all', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: new URLSearchParams({ search, category, region }),
+                body: new URLSearchParams({ ...JSON.parse(confirmBtn.dataset.filters), confirmed: confirmBtn.dataset.count }),
             });
             const data = await resp.json();
             if (!resp.ok) {
@@ -308,7 +395,9 @@
         'toggle-theme': () => setTheme(getTheme() === 'dark' ? 'light' : 'dark'),
         'toggle': (el) => byId(el.dataset.target).classList.toggle('hidden'),
         'hide': (el) => byId(el.dataset.target).classList.add('hidden'),
-        'send-all': () => startSendAll(),
+        'send-all': () => previewSendAll(),
+        'send-all-confirm': (el) => startSendAll(el),
+        'send-all-dismiss': () => { byId('send-all-progress').innerHTML = ''; },
         'cancel-job': () => cancelJob(),
         'clear-failed': (el) => clearFailedRecords(el),
         'filter-items': (el) => filterItems(el.dataset.filter),

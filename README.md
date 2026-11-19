@@ -51,7 +51,7 @@ The wizard walks you through entering your personal information (the data broker
 
 From the dashboard, you can:
 - Browse the list of registered data brokers
-- Send requests one at a time or in bulk
+- Send requests one at a time or in bulk. "Send to All" first shows what it would send (how many brokers, which ones, and which of your details go out); nothing is sent until you confirm. Setting `options.dry_run: true` in the config stops the web UI from sending anything, the same as for `eraser send`
 - Track which requests have been sent and their status
 
 That's it. The whole process takes about 10 minutes to set up, and then Eraser handles the rest.

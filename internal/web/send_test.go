@@ -104,7 +104,16 @@ func sameOrigin(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "same-origin")
 
 func (f *sendFixture) sendAll(t *testing.T) (map[string]any, int) {
 	t.Helper()
-	rec := do(f.h, http.MethodPost, "/api/send-all", sameOrigin)
+	return f.post(t, "/api/send-all", "confirmed=1000")
+}
+
+func (f *sendFixture) post(t *testing.T, path, form string) (map[string]any, int) {
+	t.Helper()
+	rec := do(f.h, http.MethodPost, path, func(r *http.Request) {
+		sameOrigin(r)
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.Body = readCloser(form)
+	})
 	var body map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	return body, rec.Code
@@ -153,7 +162,7 @@ func TestSendAllUsesSharedRules(t *testing.T) {
 	rec := do(f.h, http.MethodPost, "/api/send-all", func(r *http.Request) {
 		sameOrigin(r)
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		r.Body = readCloser("status=all")
+		r.Body = readCloser("status=all&confirmed=1")
 	})
 	var body map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
@@ -336,5 +345,84 @@ func TestSendAllStopsWithErrorWhenHistoryFails(t *testing.T) {
 	}
 	if n := len(f.sender.recipients()); n != 1 {
 		t.Errorf("sent %d emails after history failed, want 1", n)
+	}
+}
+
+// The preview shows exactly what "Send all" would send, and sends nothing.
+func TestSendAllPreview(t *testing.T) {
+	f := newSendFixture(t, config.Options{ExcludedBrokers: []string{"excluded"}, DailyLimit: 2}, brokersN("a", "b", "c", "excluded", "recent"))
+	if err := f.store.Add(&history.Record{BrokerID: "recent", BrokerName: "RECENT", Email: "privacy@recent.example",
+		Template: "generic", Status: history.StatusSent, SentAt: time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(f.h, http.MethodGet, "/api/send-all/preview?status=all", nil)
+	var p struct {
+		Total         int `json:"total"`
+		Brokers       []struct{ ID, Name, Email string }
+		SkippedRecent int      `json:"skipped_recent"`
+		Deferred      int      `json:"deferred"`
+		Sending       []string `json:"sending_fields"`
+		DryRun        bool     `json:"dry_run"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("status %d, %v: %s", rec.Code, err, rec.Body.String())
+	}
+	// recent counts toward the daily limit of 2, so one of a/b/c fits today.
+	if p.Total != 1 || len(p.Brokers) != 1 || p.Brokers[0].ID != "a" || p.SkippedRecent != 1 || p.Deferred != 2 || p.DryRun {
+		t.Errorf("preview = %+v", p)
+	}
+	if len(p.Sending) == 0 {
+		t.Error("preview doesn't say which profile fields are sent")
+	}
+	if n := len(f.sender.recipients()); n != 0 || f.s.jobManager.GetActive() != nil {
+		t.Fatalf("preview sent %d emails or started a job", n)
+	}
+}
+
+// "Send all" only sends what the user confirmed in the preview.
+func TestSendAllRequiresConfirmedCount(t *testing.T) {
+	f := newSendFixture(t, config.Options{}, brokersN("a", "b"))
+	for form, want := range map[string]int{
+		"":             http.StatusBadRequest, // no preview
+		"confirmed=x":  http.StatusBadRequest,
+		"confirmed=1":  http.StatusConflict, // the list grew since the preview
+		"confirmed=-1": http.StatusBadRequest,
+	} {
+		if body, code := f.post(t, "/api/send-all", form); code != want {
+			t.Errorf("%q: status %d %v, want %d", form, code, body, want)
+		}
+	}
+	if n := len(f.sender.recipients()); n != 0 {
+		t.Fatalf("sent %d emails without a matching confirmation", n)
+	}
+	body, code := f.post(t, "/api/send-all", "confirmed=2")
+	if code != http.StatusOK {
+		t.Fatalf("confirmed=2: status %d %v", code, body)
+	}
+	f.waitForJob(t, body["job_id"].(string))
+	if n := len(f.sender.recipients()); n != 2 {
+		t.Fatalf("sent %d, want 2", n)
+	}
+}
+
+// options.dry_run must stop web sends too, not just the CLI.
+func TestDryRunBlocksWebSends(t *testing.T) {
+	f := newSendFixture(t, config.Options{DryRun: true}, brokersN("a"))
+
+	if body, code := f.sendAll(t); code != http.StatusBadRequest || !strings.Contains(fmt.Sprint(body["error"]), "dry_run") {
+		t.Errorf("send-all: status %d %v, want 400 mentioning dry_run", code, body)
+	}
+	rec := do(f.h, http.MethodPost, "/api/send/a", sameOrigin)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "dry_run") {
+		t.Errorf("send one: status %d %q, want 400 mentioning dry_run", rec.Code, rec.Body.String())
+	}
+	if n := len(f.sender.recipients()); n != 0 {
+		t.Fatalf("dry run sent %d emails", n)
+	}
+
+	rec = do(f.h, http.MethodGet, "/api/send-all/preview", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"dry_run":true`) || !strings.Contains(rec.Body.String(), `"total":1`) {
+		t.Errorf("preview in dry run: %d %s", rec.Code, rec.Body.String())
 	}
 }
